@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proyecto Paradigmas: Escáner VR</title>
+    <style>
+        /* Estilos estilo Cyberpunk / Interfaz de Lentes */
+        body, html {
+            margin: 0; padding: 0; overflow: hidden;
+            background-color: #000; font-family: monospace;
+        }
+        .contenedor-visor {
+            position: relative; width: 100vw; height: 100vh;
+        }
+        video {
+            position: absolute; width: 100%; height: 100%;
+            object-fit: cover; z-index: 1;
+        }
+        canvas {
+            position: absolute; width: 100%; height: 100%;
+            object-fit: cover; z-index: 2;
+            pointer-events: none;
+        }
+        /* Interfaz HUD (Heads-Up Display) para el usuario en VR */
+        .hud-interfaz {
+            position: absolute; top: 30px; left: 50%;
+            transform: translateX(-50%); z-index: 3;
+            background: rgba(0, 20, 10, 0.7);
+            border: 2px solid #00ff55; border-radius: 10px;
+            color: #00ff55; padding: 15px 30px; text-align: center;
+            box-shadow: 0 0 20px rgba(0, 255, 85, 0.2);
+            backdrop-filter: blur(4px);
+        }
+        .parpadeo { animation: un-parpadeo 1.5s infinite; }
+        @keyframes un-parpadeo { 
+            0%, 100% { opacity: 1; } 50% { opacity: 0.4; } 
+        }
+    </style>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+</head>
+<body>
+
+    <div class="contenedor-visor">
+        <div class="hud-interfaz">
+            <div style="font-size: 18px; font-weight: bold; letter-spacing: 3px;">
+                🔴 ESCÁNER DE REALIDAD MIXTA
+            </div>
+            <div id="estado-sistema" class="parpadeo" style="font-size: 12px; margin-top: 5px;">
+                INICIALIZANDO SISTEMA...
+            </div>
+        </div>
+
+        <video id="camara-feed" autoplay playsinline muted></video>
+        <canvas id="capa-dibujo"></canvas>
+    </div>
+
+    <script>
+        // === APLICACIÓN DE PARADIGMA ORIENTADO A OBJETOS ===
+        
+        class CamaraHardware {
+            constructor(videoElementId) {
+                this.video = document.getElementById(videoElementId);
+            }
+            async encender() {
+                // Solicita la cámara trasera en dispositivos móviles/lentes
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: "environment" },
+                    audio: false
+                });
+                this.video.srcObject = stream;
+                return new Promise((resolve) => {
+                    this.video.onloadedmetadata = () => resolve(this.video);
+                });
+            }
+        }
+
+        class ProcesadorIA {
+            constructor() {
+                this.modelo = null;
+            }
+            async cargarModelo() {
+                // Descarga la red neuronal COCO-SSD
+                this.modelo = await cocoSsd.load();
+            }
+            async detectar(videoElemento) {
+                // Ejecuta la inferencia de la IA sobre el frame actual
+                return await this.modelo.detect(videoElemento);
+            }
+        }
+
+        class InterfazGrafica {
+            constructor(canvasId) {
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+            }
+            escalar(ancho, alto) {
+                this.canvas.width = ancho;
+                this.canvas.height = alto;
+            }
+            limpiar() {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            }
+            dibujarEscaneo(objetos) {
+                objetos.forEach(obj => {
+                    const [x, y, ancho, alto] = obj.bbox;
+                    
+                    // Definir color del HUD: Azul para personas, Verde para objetos
+                    const colorHUD = (obj.class === 'person') ? '#00d2ff' : '#00ff55';
+                    
+                    // 1. Dibujar el recuadro del escáner
+                    this.ctx.strokeStyle = colorHUD;
+                    this.ctx.lineWidth = 4;
+                    this.ctx.strokeRect(x, y, ancho, alto);
+
+                    // 2. Dibujar la etiqueta lateral (Tal como en tu boceto)
+                    this.ctx.fillStyle = colorHUD;
+                    this.ctx.font = "bold 14px monospace";
+                    const texto = `${obj.class.toUpperCase()} [${Math.round(obj.score * 100)}%]`;
+                    
+                    // Fondo del texto para legibilidad
+                    const anchoTexto = this.ctx.measureText(texto).width;
+                    this.ctx.fillRect(x, y - 25, anchoTexto + 12, 25);
+                    
+                    // Texto descriptivo plano
+                    this.ctx.fillStyle = "#000000";
+                    this.ctx.fillText(texto, x + 6, y - 7);
+                    
+                    // Pequeña línea de escáner decorativa
+                    this.ctx.fillStyle = colorHUD;
+                    this.ctx.fillRect(x, y, ancho, 2);
+                });
+            }
+        }
+
+        // --- CLASE ORQUESTADORA (MÓDULO PRINCIPAL) ---
+        class AplicacionEscaner {
+            constructor() {
+                this.hardware = new CamaraHardware('camara-feed');
+                this.ia = new ProcesadorIA();
+                this.gui = new InterfazGrafica('capa-dibujo');
+                this.txtEstado = document.getElementById('estado-sistema');
+            }
+
+            async ejecutar() {
+                try {
+                    await this.hardware.encender();
+                    this.txtEstado.innerText = "CONECTANDO CON LA RED NEURONAL...";
+                    
+                    await this.ia.cargarModelo();
+                    this.txtEstado.innerText = "SISTEMA ONLINE - BUSCANDO OBJETIVOS";
+                    
+                    this.gui.escalar(this.hardware.video.videoWidth, this.hardware.video.videoHeight);
+                    
+                    // Ciclo continuo de detección
+                    this.bucleEscaneo();
+                } catch (err) {
+                    this.txtEstado.innerText = "ERROR DE CONFIGURACIÓN";
+                    console.error(err);
+                }
+            }
+
+            async bucleEscaneo() {
+                this.gui.limpiar();
+                
+                // Pedir predicciones a la IA
+                const hallazgos = await this.ia.detectar(this.hardware.video);
+                
+                // Dibujar en pantalla
+                this.gui.dibujarEscaneo(hallazgos);
+                
+                // Repetir recursivamente en el próximo frame disponible
+                requestAnimationFrame(() => this.bucleEscaneo());
+            }
+        }
+
+        // Inicialización del sistema completo
+        // Inicialización del sistema completo
+        const sistema = new AplicacionEscaner();
+        window.addEventListener('DOMContentLoaded', () => sistema.ejecutar());
+    </script>
+</body>
+</html>
