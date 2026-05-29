@@ -21,7 +21,6 @@
             object-fit: cover; z-index: 2;
             pointer-events: none;
         }
-        /* HUD Superior minimalista y moderno */
         .hud-barra-superior {
             position: absolute; top: 20px; left: 50%;
             transform: translateX(-50%); z-index: 3;
@@ -70,20 +69,44 @@
             "vase": "florero", "scissors": "tijeras", "teddy bear": "peluche", "toothbrush": "cepillo de dientes"
         };
 
+        // === ESTA CLASE FUE LA QUE SE REESTRUCTURÓ PARA LOS LENTES VR ===
         class CamaraHardware {
             constructor(videoElementId) {
                 this.video = document.getElementById(videoElementId);
             }
             async encender() {
                 try {
-                    // Forzado estricto de cámara exterior
-                    const stream = await navigator.mediaDevices.getUserMedia({
-                        video: { facingMode: { exact: "environment" }, width: 1280, height: 720 },
-                        audio: false
-                    });
+                    // 1. Escaneamos la lista de cámaras físicas del dispositivo
+                    const dispositivos = await navigator.mediaDevices.enumerateDevices();
+                    const camaras = dispositivos.filter(device => device.kind === 'videoinput');
+                    
+                    let opcionesCamara = { audio: false, video: true };
+
+                    if (camaras.length > 0) {
+                        // Buscamos una cámara externa que apunte hacia el frente del visor (Passthrough)
+                        let camaraExterna = camaras.find(c => 
+                            c.label.toLowerCase().includes('back') || 
+                            c.label.toLowerCase().includes('external') ||
+                            c.label.toLowerCase().includes('passthrough') ||
+                            c.label.toLowerCase().includes('ambiente')
+                        );
+
+                        // Si el navegador no da etiquetas con nombre, tomamos por defecto la última de la lista
+                        if (!camaraExterna) {
+                            camaraExterna = camaras[camaras.length - 1];
+                        }
+
+                        opcionesCamara.video = {
+                            deviceId: { exact: camaraExterna.deviceId },
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 }
+                        };
+                    }
+
+                    const stream = await navigator.mediaDevices.getUserMedia(opcionesCamara);
                     this.video.srcObject = stream;
                 } catch (e) {
-                    // Modo de respaldo automático
+                    console.log("Fallo el mapeo manual, usando cámara por defecto...");
                     const streamRespaldo = await navigator.mediaDevices.getUserMedia({
                         video: { facingMode: "environment" }, audio: false
                     });
@@ -96,11 +119,9 @@
         class ProcesadorIA {
             constructor() { this.modelo = null; }
             async cargarModelo() {
-                // Configuración de optimización de velocidad para COCO-SSD
                 this.modelo = await cocoSsd.load({ base: 'mobilenet_v2' });
             }
             async detectar(videoElemento) {
-                // Deshabilitamos el rastreo de tensores extra para evitar fugas de memoria y acelerar FPS
                 tf.engine().startScope();
                 const predicciones = await this.modelo.detect(videoElemento, 5, 0.45);
                 tf.engine().endScope();
@@ -126,34 +147,28 @@
                     const nombreEsp = diccionarioEspanol[nombreEng] || nombreEng;
                     const porcen = Math.round(obj.score * 100);
                     
-                    // Paleta de colores cibernéticos: Azul cian para personas, Verde neón para objetos
                     const colorHUD = (nombreEng === 'person') ? '#00f0ff' : '#00ff66';
                     
-                    // --- 1. CUADRO DELIMITADOR ESTILO MILITAR (Bordes reforzados) ---
+                    // Cuadro delimitador militar
                     this.ctx.strokeStyle = colorHUD;
                     this.ctx.lineWidth = 1.5;
                     this.ctx.strokeRect(x, y, ancho, alto);
 
-                    // Esquinas reforzadas gruesas
+                    // Esquinas reforzadas
                     this.ctx.fillStyle = colorHUD;
-                    const l = Math.min(20, ancho * 0.2); // Largo de las esquinas
-                    const g = 4; // Grosor de las esquinas
-                    // Superior Izquierda
+                    const l = Math.min(20, ancho * 0.2);
+                    const g = 4;
                     this.ctx.fillRect(x - 1, y - 1, l, g); this.ctx.fillRect(x - 1, y - 1, g, l);
-                    // Superior Derecha
                     this.ctx.fillRect(x + ancho - l + 1, y - 1, l, g); this.ctx.fillRect(x + ancho - g + 1, y - 1, g, l);
-                    // Inferior Izquierda
                     this.ctx.fillRect(x - 1, y + alto - g + 1, l, g); this.ctx.fillRect(x - 1, y + alto - l + 1, g, l);
-                    // Inferior Derecha
                     this.ctx.fillRect(x + ancho - l + 1, y + alto - g + 1, l, g); this.ctx.fillRect(x + ancho - g + 1, y + alto - l + 1, g, l);
 
-                    // --- 2. LÍNEAS GUÍA Y CUADRO DE DATOS FLOTANTE ---
+                    // Líneas guía punteadas
                     this.ctx.save();
                     this.ctx.strokeStyle = colorHUD;
-                    this.ctx.setLineDash([4, 4]); // Línea punteada
+                    this.ctx.setLineDash([4, 4]);
                     this.ctx.lineWidth = 1;
                     
-                    // Dibujar línea desde el centro derecho del cuadro hacia la derecha
                     const posXData = x + ancho + 30;
                     const posYData = y + 20;
                     this.ctx.beginPath();
@@ -162,7 +177,7 @@
                     this.ctx.stroke();
                     this.ctx.restore();
 
-                    // --- 3. ETIQUETA LATERAL CON DETALLES ---
+                    // Etiqueta lateral flotante de datos
                     this.ctx.fillStyle = "rgba(0, 15, 5, 0.75)";
                     this.ctx.strokeStyle = colorHUD;
                     this.ctx.lineWidth = 1;
@@ -173,11 +188,10 @@
                     const anchoCaja = Math.max(this.ctx.measureText(txtCabecera).width, this.ctx.measureText(txtDetalle).width) + 15;
                     const altoCaja = 40;
 
-                    // Fondo y contorno del cuadro de texto lateral
+                    this.fillRect(posXData, posYData - 15, anchoCaja, altoCaja);
                     this.ctx.fillRect(posXData, posYData - 15, anchoCaja, altoCaja);
                     this.ctx.strokeRect(posXData, posYData - 15, anchoCaja, altoCaja);
 
-                    // Dibujar los textos internos
                     this.ctx.font = "bold 11px 'Courier New', monospace";
                     this.ctx.fillStyle = colorHUD;
                     this.ctx.fillText(txtCabecera, posXData + 8, posYData - 2);
@@ -218,8 +232,7 @@
                 this.gui.limpiar();
                 const hallazgos = await this.ia.detectar(this.hardware.video);
                 this.gui.dibujarHUD(hallazgos);
-                // Ejecución optimizada frame por frame
-                setTimeout(() => requestAnimationFrame(() => this.bucleEscaneo()), 1000 / 30); // Capado a 30fps máximo para mantener estabilidad
+                setTimeout(() => requestAnimationFrame(() => this.bucleEscaneo()), 1000 / 30);
             }
         }
 
