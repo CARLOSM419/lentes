@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Escáner de Realidad Mixta Avanzado</title>
+    <style>
+        body, html {
+            margin: 0; padding: 0; overflow: hidden;
+            background-color: #000; font-family: 'Courier New', Courier, monospace;
+        }
+        .contenedor-visor {
+            position: relative; width: 100vw; height: 100vh;
+        }
+        video {
+            position: absolute; width: 100%; height: 100%;
+            object-fit: cover; z-index: 1;
+        }
+        canvas {
+            position: absolute; width: 100%; height: 100%;
+            object-fit: cover; z-index: 2;
+            pointer-events: none;
+        }
+        /* HUD Superior minimalista y moderno */
+        .hud-barra-superior {
+            position: absolute; top: 20px; left: 50%;
+            transform: translateX(-50%); z-index: 3;
+            background: rgba(0, 30, 15, 0.8);
+            border: 1px solid #00ff66; border-radius: 4px;
+            color: #00ff66; padding: 10px 25px; 
+            text-align: center; font-size: 13px; font-weight: bold;
+            box-shadow: 0 0 15px rgba(0, 255, 102, 0.2);
+            backdrop-filter: blur(5px); letter-spacing: 2px;
+        }
+        .parpadeo { animation: un-parpadeo 2s infinite; }
+        @keyframes un-parpadeo { 
+            0%, 100% { opacity: 1; } 50% { opacity: 0.5; } 
+        }
+    </style>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+</head>
+<body>
+
+    <div class="contenedor-visor">
+        <div class="hud-barra-superior">
+            SISTEMA DE ESCANEO ACTIVO <span class="parpadeo" id="estado-sistema" style="color: #fff; margin-left: 10px;">[ CARGANDO IA... ]</span>
+        </div>
+
+        <video id="camara-feed" autoplay playsinline muted></video>
+        <canvas id="capa-dibujo"></canvas>
+    </div>
+
+    <script>
+        // Diccionario completo de traducción
+        const diccionarioEspanol = {
+            "person": "persona", "bicycle": "bicicleta", "car": "carro", "motorcycle": "motocicleta",
+            "airplane": "avión", "bus": "autobús", "train": "tren", "truck": "camión", "boat": "barco",
+            "traffic light": "semáforo", "fire hydrant": "hidrante", "stop sign": "alto",
+            "bench": "banca", "backpack": "mochila", "umbrella": "paraguas", "handbag": "bolso", 
+            "tie": "corbata", "suitcase": "maleta", "sports ball": "pelota", "bottle": "botella", 
+            "wine glass": "copa", "cup": "taza", "fork": "tenedor", "knife": "cuchillo", 
+            "spoon": "cuchara", "bowl": "plato/tazón", "banana": "plátano", "apple": "manzana", 
+            "sandwich": "sándwich", "orange": "naranja", "broccoli": "brócoli", "carrot": "zanahoria", 
+            "chair": "silla", "couch": "sillón", "potted plant": "planta", "bed": "cama", 
+            "dining table": "mesa", "tv": "pantalla/tv", "laptop": "portátil/laptop", "mouse": "mouse", 
+            "remote": "control remoto", "keyboard": "teclado", "cell phone": "celular", "microwave": "microondas", 
+            "oven": "horno", "refrigerator": "refrigerador", "book": "libro", "clock": "reloj", 
+            "vase": "florero", "scissors": "tijeras", "teddy bear": "peluche", "toothbrush": "cepillo de dientes"
+        };
+
+        class CamaraHardware {
+            constructor(videoElementId) {
+                this.video = document.getElementById(videoElementId);
+            }
+            async encender() {
+                try {
+                    // Forzado estricto de cámara exterior
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: { exact: "environment" }, width: 1280, height: 720 },
+                        audio: false
+                    });
+                    this.video.srcObject = stream;
+                } catch (e) {
+                    // Modo de respaldo automático
+                    const streamRespaldo = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: "environment" }, audio: false
+                    });
+                    this.video.srcObject = streamRespaldo;
+                }
+                return new Promise(resolve => this.video.onloadedmetadata = () => resolve(this.video));
+            }
+        }
+
+        class ProcesadorIA {
+            constructor() { this.modelo = null; }
+            async cargarModelo() {
+                // Configuración de optimización de velocidad para COCO-SSD
+                this.modelo = await cocoSsd.load({ base: 'mobilenet_v2' });
+            }
+            async detectar(videoElemento) {
+                // Deshabilitamos el rastreo de tensores extra para evitar fugas de memoria y acelerar FPS
+                tf.engine().startScope();
+                const predicciones = await this.modelo.detect(videoElemento, 5, 0.45);
+                tf.engine().endScope();
+                return predicciones;
+            }
+        }
+
+        class InterfazGrafica {
+            constructor(canvasId) {
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+            }
+            escalar(ancho, alto) {
+                this.canvas.width = ancho;
+                this.canvas.height = alto;
+            }
+            limpiar() { this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height); }
+            
+            dibujarHUD(objetos) {
+                objetos.forEach(obj => {
+                    const [x, y, ancho, alto] = obj.bbox;
+                    const nombreEng = obj.class;
+                    const nombreEsp = diccionarioEspanol[nombreEng] || nombreEng;
+                    const porcen = Math.round(obj.score * 100);
+                    
+                    // Paleta de colores cibernéticos: Azul cian para personas, Verde neón para objetos
+                    const colorHUD = (nombreEng === 'person') ? '#00f0ff' : '#00ff66';
+                    
+                    // --- 1. CUADRO DELIMITADOR ESTILO MILITAR (Bordes reforzados) ---
+                    this.ctx.strokeStyle = colorHUD;
+                    this.ctx.lineWidth = 1.5;
+                    this.ctx.strokeRect(x, y, ancho, alto);
+
+                    // Esquinas reforzadas gruesas
+                    this.ctx.fillStyle = colorHUD;
+                    const l = Math.min(20, ancho * 0.2); // Largo de las esquinas
+                    const g = 4; // Grosor de las esquinas
+                    // Superior Izquierda
+                    this.ctx.fillRect(x - 1, y - 1, l, g); this.ctx.fillRect(x - 1, y - 1, g, l);
+                    // Superior Derecha
+                    this.ctx.fillRect(x + ancho - l + 1, y - 1, l, g); this.ctx.fillRect(x + ancho - g + 1, y - 1, g, l);
+                    // Inferior Izquierda
+                    this.ctx.fillRect(x - 1, y + alto - g + 1, l, g); this.ctx.fillRect(x - 1, y + alto - l + 1, g, l);
+                    // Inferior Derecha
+                    this.ctx.fillRect(x + ancho - l + 1, y + alto - g + 1, l, g); this.ctx.fillRect(x + ancho - g + 1, y + alto - l + 1, g, l);
+
+                    // --- 2. LÍNEAS GUÍA Y CUADRO DE DATOS FLOTANTE ---
+                    this.ctx.save();
+                    this.ctx.strokeStyle = colorHUD;
+                    this.ctx.setLineDash([4, 4]); // Línea punteada
+                    this.ctx.lineWidth = 1;
+                    
+                    // Dibujar línea desde el centro derecho del cuadro hacia la derecha
+                    const posXData = x + ancho + 30;
+                    const posYData = y + 20;
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(x + ancho, y + 20);
+                    this.ctx.lineTo(posXData, posYData);
+                    this.ctx.stroke();
+                    this.ctx.restore();
+
+                    // --- 3. ETIQUETA LATERAL CON DETALLES ---
+                    this.ctx.fillStyle = "rgba(0, 15, 5, 0.75)";
+                    this.ctx.strokeStyle = colorHUD;
+                    this.ctx.lineWidth = 1;
+                    
+                    const txtCabecera = `[${(nombreEng === 'person' ? 'OBJ-HUMANO' : 'OBJ-ENTORNO')}]`;
+                    const txtDetalle = `${nombreEsp.toUpperCase()} : ${porcen}%`;
+                    
+                    const anchoCaja = Math.max(this.ctx.measureText(txtCabecera).width, this.ctx.measureText(txtDetalle).width) + 15;
+                    const altoCaja = 40;
+
+                    // Fondo y contorno del cuadro de texto lateral
+                    this.ctx.fillRect(posXData, posYData - 15, anchoCaja, altoCaja);
+                    this.ctx.strokeRect(posXData, posYData - 15, anchoCaja, altoCaja);
+
+                    // Dibujar los textos internos
+                    this.ctx.font = "bold 11px 'Courier New', monospace";
+                    this.ctx.fillStyle = colorHUD;
+                    this.ctx.fillText(txtCabecera, posXData + 8, posYData - 2);
+                    
+                    this.ctx.font = "12px 'Courier New', monospace";
+                    this.ctx.fillStyle = "#ffffff";
+                    this.ctx.fillText(txtDetalle, posXData + 8, posYData + 14);
+                });
+            }
+        }
+
+        class AplicacionEscaner {
+            constructor() {
+                this.hardware = new CamaraHardware('camara-feed');
+                this.ia = new ProcesadorIA();
+                this.gui = new InterfazGrafica('capa-dibujo');
+                this.txtEstado = document.getElementById('estado-sistema');
+            }
+
+            async ejecutar() {
+                try {
+                    await this.hardware.encender();
+                    await this.ia.cargarModelo();
+                    
+                    this.txtEstado.innerText = "[ ONLINE ]";
+                    this.txtEstado.style.color = "#00ff66";
+                    
+                    this.gui.escalar(this.hardware.video.videoWidth, this.hardware.video.videoHeight);
+                    this.bucleEscaneo();
+                } catch (err) {
+                    this.txtEstado.innerText = "[ ERROR DE RECONOCIMIENTO ]";
+                    this.txtEstado.style.color = "#ff3333";
+                    console.error(err);
+                }
+            }
+
+            async bucleEscaneo() {
+                this.gui.limpiar();
+                const hallazgos = await this.ia.detectar(this.hardware.video);
+                this.gui.dibujarHUD(hallazgos);
+                // Ejecución optimizada frame por frame
+                setTimeout(() => requestAnimationFrame(() => this.bucleEscaneo()), 1000 / 30); // Capado a 30fps máximo para mantener estabilidad
+            }
+        }
+
+        const sistema = new AplicacionEscaner();
+        window.addEventListener('DOMContentLoaded', () => sistema.ejecutar());
+    </script>
+</body>
+</html>
